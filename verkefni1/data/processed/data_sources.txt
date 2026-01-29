@@ -1,0 +1,7 @@
+Data sources
+
+1) Launavisitala eftir manudum fra 1989
+   https://px.hagstofa.is/pxis/pxweb/is/Samfelag/Samfelag__launogtekjur__2_lvt__1_manadartolur/LAU04000.px
+
+2) Visitola neysluverds, timaraidir a eldri grunnum
+   https://px.hagstofa.is/pxis/pxweb/is/Efnahagur/Efnahagur__visitolur__1_vnv__1_vnv/VIS01002.px/

@@ -27,13 +27,13 @@ Notes
 Where to run (important)
 The safest way is to run from the project folder:
 
-  cd c:\Users\OliverOrri\OneDrive\Læra\verkefni1
+  cd c:\verkefni1
   python src\00_fetch_to_raw_csv.py
   python src\01_load_raw_to_sql_clean.py
   python src\02_export_merged_for_jamovi.py
 
 You can also run with full paths from anywhere:
 
-  python c:\Users\OliverOrri\OneDrive\Læra\verkefni1\src\00_fetch_to_raw_csv.py
-  python c:\Users\OliverOrri\OneDrive\Læra\verkefni1\src\01_load_raw_to_sql_clean.py
-  python c:\Users\OliverOrri\OneDrive\Læra\verkefni1\src\02_export_merged_for_jamovi.py
+  python c:..\verkefni1\src\00_fetch_to_raw_csv.py
+  python c:..\verkefni1\src\01_load_raw_to_sql_clean.py
+  python c:..\verkefni1\src\02_export_merged_for_jamovi.py

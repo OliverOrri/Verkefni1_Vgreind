@@ -1,14 +1,14 @@
-import sqlite3
 import re
 from pathlib import Path
+import os
 import unicodedata
 import pandas as pd
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_RAW = BASE_DIR / "data" / "raw"
 DATA_PROCESSED = BASE_DIR / "data" / "processed"
 SQL_DIR = BASE_DIR / "sql"
-DB_PATH = BASE_DIR / "iceland_wage_cpi.sqlite"
 
 WAGE_RAW_CSV = DATA_RAW / "wage_raw.csv"
 CPI_RAW_CSV = DATA_RAW / "cpi_raw.csv"
@@ -33,7 +33,7 @@ def clean_numeric(series: pd.Series) -> pd.Series:
     """
     Converts value_text to numeric. Handles '..' and missing.
     """
-    return pd.to_numeric(series.replace({None: pd.NA, "..": pd.NA, "…": pd.NA}), errors="coerce")
+    return pd.to_numeric(series.replace({None: pd.NA, "..": pd.NA, "â€¦": pd.NA}), errors="coerce")
 
 
 def assert_required_columns(df: pd.DataFrame, required: set, label: str):
@@ -57,28 +57,46 @@ def find_month_column(df: pd.DataFrame) -> str | None:
     return None
 
 
-def load_sql_file(conn: sqlite3.Connection, path: Path):
-    sql = path.read_text(encoding="utf-8")
-    conn.executescript(sql)
+def load_sql_file(cur, path: Path):
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("--"):
+            continue
+        lines.append(line)
+    sql = "\n".join(lines)
+    for stmt in sql.split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            cur.execute(stmt)
+
+
+def get_pg_dsn() -> str:
+    return os.environ.get("PG_DSN") or os.environ.get("DATABASE_URL") or "postgresql://postgres:postgres@localhost:5432/wage_cpi"
+
+
+def connect_postgres(dsn: str):
+    try:
+        import psycopg
+        return psycopg.connect(dsn)
+    except ImportError:
+        import psycopg2
+        return psycopg2.connect(dsn)
 
 
 def quality_checks_python(wage_clean: pd.DataFrame, cpi_clean: pd.DataFrame):
-    # Duplicate checks
     if wage_clean["Month"].duplicated().any():
         raise ValueError("WAGE CLEAN: duplicate Month values after cleaning.")
     if cpi_clean["Month"].duplicated().any():
         raise ValueError("CPI CLEAN: duplicate Month values after cleaning.")
 
-    # NA checks (not fatal, but log)
     print("Python QC: wage NA =", int(wage_clean["WageIndex"].isna().sum()))
     print("Python QC: cpi  NA =", int(cpi_clean["CPI"].isna().sum()))
 
-    # Basic stats
     print("Python QC: wage mean =", float(wage_clean["WageIndex"].mean()))
     print("Python QC: cpi  mean =", float(cpi_clean["CPI"].mean()))
 
 
-def quality_checks_sql(conn: sqlite3.Connection):
+def quality_checks_sql(conn):
     cur = conn.cursor()
 
     for t in ["wage_index_raw", "cpi_raw", "wage_index_clean", "cpi_clean"]:
@@ -106,11 +124,6 @@ def main():
     wage_raw = pd.read_csv(WAGE_RAW_CSV)
     cpi_raw = pd.read_csv(CPI_RAW_CSV)
 
-    # Your 00_fetch creates columns like: Mánuður/Mánuđur, value, source, fetched_at
-    # We'll support either:
-    #  - month_code + value_text
-    #  - or Mánuður/Mánuđur + value
-    # Normalize columns:
     if "month_code" not in wage_raw.columns:
         month_col = find_month_column(wage_raw)
         if month_col:
@@ -128,7 +141,6 @@ def main():
     assert_required_columns(wage_raw, {"month_code", "value_text"}, "WAGE RAW")
     assert_required_columns(cpi_raw, {"month_code", "value_text"}, "CPI RAW")
 
-    # Clean in Python (no manual edits)
     wage_clean = pd.DataFrame({
         "Month": wage_raw["month_code"].map(parse_px_month),
         "WageIndex": clean_numeric(wage_raw["value_text"])
@@ -139,45 +151,54 @@ def main():
         "CPI": clean_numeric(cpi_raw["value_text"])
     }).sort_values("Month").reset_index(drop=True)
 
-    # Drop rows with missing CPI to satisfy NOT NULL constraint
     cpi_clean = cpi_clean.dropna(subset=["CPI"]).reset_index(drop=True)
 
     quality_checks_python(wage_clean, cpi_clean)
 
-    # Save clean CSVs for inspection/use in other tools
     DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
     wage_clean.to_csv(WAGE_CLEAN_CSV, index=False, encoding="utf-8")
     cpi_clean.to_csv(CPI_CLEAN_CSV, index=False, encoding="utf-8")
     print("Saved:", WAGE_CLEAN_CSV)
     print("Saved:", CPI_CLEAN_CSV)
 
-    # SQL load
-    conn = sqlite3.connect(DB_PATH)
+    dsn = get_pg_dsn()
+    conn = connect_postgres(dsn)
     try:
-        load_sql_file(conn, SCHEMA_SQL)
+        conn.autocommit = False
+        cur = conn.cursor()
 
-        # Load raw (as-is)
-        wage_raw[["month_code", "value_text", "source", "fetched_at"]].to_sql(
-            "wage_index_raw", conn, if_exists="append", index=False
+        load_sql_file(cur, SCHEMA_SQL)
+
+        wage_raw_rows = list(wage_raw[["month_code", "value_text", "source", "fetched_at"]].itertuples(index=False, name=None))
+        cpi_raw_rows = list(cpi_raw[["month_code", "value_text", "source", "fetched_at"]].itertuples(index=False, name=None))
+
+        cur.executemany(
+            "INSERT INTO wage_index_raw (month_code, value_text, source, fetched_at) VALUES (%s, %s, %s, %s)",
+            wage_raw_rows
         )
-        cpi_raw[["month_code", "value_text", "source", "fetched_at"]].to_sql(
-            "cpi_raw", conn, if_exists="append", index=False
+        cur.executemany(
+            "INSERT INTO cpi_raw (month_code, value_text, source, fetched_at) VALUES (%s, %s, %s, %s)",
+            cpi_raw_rows
         )
 
-        # Load clean
-        wage_clean.rename(columns={"Month": "month", "WageIndex": "wage_index"}).to_sql(
-            "wage_index_clean", conn, if_exists="append", index=False
+        wage_clean_rows = list(wage_clean.rename(columns={"Month": "month", "WageIndex": "wage_index"}).itertuples(index=False, name=None))
+        cpi_clean_rows = list(cpi_clean.rename(columns={"Month": "month", "CPI": "cpi"}).itertuples(index=False, name=None))
+
+        cur.executemany(
+            "INSERT INTO wage_index_clean (month, wage_index) VALUES (%s, %s)",
+            wage_clean_rows
         )
-        cpi_clean.rename(columns={"Month": "month", "CPI": "cpi"}).to_sql(
-            "cpi_clean", conn, if_exists="append", index=False
+        cur.executemany(
+            "INSERT INTO cpi_clean (month, cpi) VALUES (%s, %s)",
+            cpi_clean_rows
         )
 
-        load_sql_file(conn, VIEWS_SQL)
+        load_sql_file(cur, VIEWS_SQL)
 
         conn.commit()
         quality_checks_sql(conn)
 
-        print(f"Done. Created/updated SQLite DB: {DB_PATH}")
+        print("Done. Loaded data into Postgres.")
     finally:
         conn.close()
 

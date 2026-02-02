@@ -20,6 +20,19 @@ Output files
 - data/processed/cpi_clean.csv
 - data/processed/wage_cpi_merged_from_sql.csv
 
+Postgres option (uses the same SQL files)
+Set PG_DSN or DATABASE_URL, then run:
+
+  python src\\01_load_raw_to_postgres_clean.py
+  python src\\02_export_merged_for_jamovi_postgres.py
+
+Default DSN (if env var missing):
+  postgresql://postgres:postgres@localhost:5432/wage_cpi
+
+Requires one of:
+  pip install psycopg
+  pip install psycopg2-binary
+
 Notes
 - If Excel has the merged CSV open, the export step will fail. Close the file and re-run.
 - If you run the scripts from outside the project folder, it still works.

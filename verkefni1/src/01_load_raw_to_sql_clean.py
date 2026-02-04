@@ -17,6 +17,8 @@ CPI_CLEAN_CSV = DATA_PROCESSED / "cpi_clean.csv"
 
 SCHEMA_SQL = SQL_DIR / "00_schema.sql"
 VIEWS_SQL = SQL_DIR / "01_views.sql"
+MIN_MONTH = "2000-01"
+MAX_MONTH = "2025-12"
 
 
 def parse_px_month(px_month: str) -> str:
@@ -95,6 +97,10 @@ def quality_checks_sql(conn: sqlite3.Connection):
     print("SQL cpi_clean avg/min/max:", cur.fetchone())
 
 
+def filter_month_window(df: pd.DataFrame, month_col: str) -> pd.DataFrame:
+    return df[(df[month_col] >= MIN_MONTH) & (df[month_col] <= MAX_MONTH)].reset_index(drop=True)
+
+
 def main():
     if not WAGE_RAW_CSV.exists():
         raise FileNotFoundError(f"Missing {WAGE_RAW_CSV}. Run src/00_fetch_to_raw_csv.py first.")
@@ -133,11 +139,13 @@ def main():
         "Month": wage_raw["month_code"].map(parse_px_month),
         "WageIndex": clean_numeric(wage_raw["value_text"])
     }).sort_values("Month").reset_index(drop=True)
+    wage_clean = filter_month_window(wage_clean, "Month")
 
     cpi_clean = pd.DataFrame({
         "Month": cpi_raw["month_code"].map(parse_px_month),
         "CPI": clean_numeric(cpi_raw["value_text"])
     }).sort_values("Month").reset_index(drop=True)
+    cpi_clean = filter_month_window(cpi_clean, "Month")
 
     # Drop rows with missing CPI to satisfy NOT NULL constraint
     cpi_clean = cpi_clean.dropna(subset=["CPI"]).reset_index(drop=True)

@@ -33,6 +33,22 @@ Requires one of:
   pip install psycopg
   pip install psycopg2-binary
 
+SQL Server option
+Set SQLSERVER_CONN_STR, then run:
+
+  python src\\01_load_raw_to_sqlserver_clean.py
+  python src\\02_export_merged_for_jamovi_sqlserver.py
+
+Default SQLSERVER_CONN_STR (if env var missing):
+  Auto-detect ODBC driver (18/17/SQL Server), then:
+  Server=localhost,1433;Database=wage_cpi;UID=sa;PWD=YourStrong!Passw0rd
+
+Requires:
+  pip install pyodbc
+
+One-shot SQL Server pipeline:
+  .\run_sqlserver_pipeline.ps1
+
 Notes
 - If Excel has the merged CSV open, the export step will fail. Close the file and re-run.
 - If you run the scripts from outside the project folder, it still works.

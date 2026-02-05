@@ -12,8 +12,11 @@ DB_PATH = BASE_DIR / "iceland_wage_cpi.sqlite"
 
 WAGE_RAW_CSV = DATA_RAW / "wage_raw.csv"
 CPI_RAW_CSV = DATA_RAW / "cpi_raw.csv"
+WAGE_YOY_RAW_CSV = DATA_RAW / "wage_yoy_raw.csv"
+CPI_YOY_RAW_CSV = DATA_RAW / "cpi_yoy_raw.csv"
 WAGE_CLEAN_CSV = DATA_PROCESSED / "wage_clean.csv"
 CPI_CLEAN_CSV = DATA_PROCESSED / "cpi_clean.csv"
+WAGE_CPI_ANNUAL_CHANGE_CSV = DATA_PROCESSED / "wage_cpi_annual_change.csv"
 
 SCHEMA_SQL = SQL_DIR / "00_schema.sql"
 VIEWS_SQL = SQL_DIR / "01_views.sql"
@@ -83,7 +86,7 @@ def quality_checks_python(wage_clean: pd.DataFrame, cpi_clean: pd.DataFrame):
 def quality_checks_sql(conn: sqlite3.Connection):
     cur = conn.cursor()
 
-    for t in ["wage_index_raw", "cpi_raw", "wage_index_clean", "cpi_clean"]:
+    for t in ["wage_index_raw", "cpi_raw", "wage_index_clean", "cpi_clean", "wage_cpi_annual_change_clean"]:
         cur.execute(f"SELECT COUNT(*) FROM {t}")
         print(f"SQL rows {t}:", cur.fetchone()[0])
 
@@ -106,11 +109,17 @@ def main():
         raise FileNotFoundError(f"Missing {WAGE_RAW_CSV}. Run src/00_fetch_to_raw_csv.py first.")
     if not CPI_RAW_CSV.exists():
         raise FileNotFoundError(f"Missing {CPI_RAW_CSV}. Run src/00_fetch_to_raw_csv.py first.")
+    if not WAGE_YOY_RAW_CSV.exists():
+        raise FileNotFoundError(f"Missing {WAGE_YOY_RAW_CSV}. Run src/00_fetch_to_raw_csv.py first.")
+    if not CPI_YOY_RAW_CSV.exists():
+        raise FileNotFoundError(f"Missing {CPI_YOY_RAW_CSV}. Run src/00_fetch_to_raw_csv.py first.")
     if not SCHEMA_SQL.exists() or not VIEWS_SQL.exists():
         raise FileNotFoundError("Missing sql/00_schema.sql or sql/01_views.sql. Create those files first.")
 
     wage_raw = pd.read_csv(WAGE_RAW_CSV)
     cpi_raw = pd.read_csv(CPI_RAW_CSV)
+    wage_yoy_raw = pd.read_csv(WAGE_YOY_RAW_CSV)
+    cpi_yoy_raw = pd.read_csv(CPI_YOY_RAW_CSV)
 
     # Your 00_fetch creates columns like: Mánuður/Mánuđur, value, source, fetched_at
     # We'll support either:
@@ -131,8 +140,24 @@ def main():
     if "value_text" not in cpi_raw.columns and "value" in cpi_raw.columns:
         cpi_raw = cpi_raw.rename(columns={"value": "value_text"})
 
+    if "month_code" not in wage_yoy_raw.columns:
+        month_col = find_month_column(wage_yoy_raw)
+        if month_col:
+            wage_yoy_raw = wage_yoy_raw.rename(columns={month_col: "month_code"})
+    if "value_text" not in wage_yoy_raw.columns and "value" in wage_yoy_raw.columns:
+        wage_yoy_raw = wage_yoy_raw.rename(columns={"value": "value_text"})
+
+    if "month_code" not in cpi_yoy_raw.columns:
+        month_col = find_month_column(cpi_yoy_raw)
+        if month_col:
+            cpi_yoy_raw = cpi_yoy_raw.rename(columns={month_col: "month_code"})
+    if "value_text" not in cpi_yoy_raw.columns and "value" in cpi_yoy_raw.columns:
+        cpi_yoy_raw = cpi_yoy_raw.rename(columns={"value": "value_text"})
+
     assert_required_columns(wage_raw, {"month_code", "value_text"}, "WAGE RAW")
     assert_required_columns(cpi_raw, {"month_code", "value_text"}, "CPI RAW")
+    assert_required_columns(wage_yoy_raw, {"month_code", "value_text"}, "WAGE YOY RAW")
+    assert_required_columns(cpi_yoy_raw, {"month_code", "value_text"}, "CPI YOY RAW")
 
     # Clean in Python (no manual edits)
     wage_clean = pd.DataFrame({
@@ -150,14 +175,31 @@ def main():
     # Drop rows with missing CPI to satisfy NOT NULL constraint
     cpi_clean = cpi_clean.dropna(subset=["CPI"]).reset_index(drop=True)
 
+    wage_yoy_clean = pd.DataFrame({
+        "Month": wage_yoy_raw["month_code"].map(parse_px_month),
+        "WageAnnualPct": clean_numeric(wage_yoy_raw["value_text"])
+    }).sort_values("Month").reset_index(drop=True)
+    wage_yoy_clean = filter_month_window(wage_yoy_clean, "Month")
+
+    cpi_yoy_clean = pd.DataFrame({
+        "Month": cpi_yoy_raw["month_code"].map(parse_px_month),
+        "CPIAnnualPct": clean_numeric(cpi_yoy_raw["value_text"])
+    }).sort_values("Month").reset_index(drop=True)
+    cpi_yoy_clean = filter_month_window(cpi_yoy_clean, "Month")
+
+    wage_cpi_annual_change = wage_yoy_clean.merge(cpi_yoy_clean, on="Month", how="inner")
+    wage_cpi_annual_change = wage_cpi_annual_change.dropna(subset=["WageAnnualPct", "CPIAnnualPct"]).reset_index(drop=True)
+
     quality_checks_python(wage_clean, cpi_clean)
 
     # Save clean CSVs for inspection/use in other tools
     DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
     wage_clean.to_csv(WAGE_CLEAN_CSV, index=False, encoding="utf-8")
     cpi_clean.to_csv(CPI_CLEAN_CSV, index=False, encoding="utf-8")
+    wage_cpi_annual_change.to_csv(WAGE_CPI_ANNUAL_CHANGE_CSV, index=False, encoding="utf-8")
     print("Saved:", WAGE_CLEAN_CSV)
     print("Saved:", CPI_CLEAN_CSV)
+    print("Saved:", WAGE_CPI_ANNUAL_CHANGE_CSV)
 
     # SQL load
     conn = sqlite3.connect(DB_PATH)
@@ -179,6 +221,9 @@ def main():
         cpi_clean.rename(columns={"Month": "month", "CPI": "cpi"}).to_sql(
             "cpi_clean", conn, if_exists="append", index=False
         )
+        wage_cpi_annual_change.rename(
+            columns={"Month": "month", "WageAnnualPct": "wage_annual_pct", "CPIAnnualPct": "cpi_annual_pct"}
+        ).to_sql("wage_cpi_annual_change_clean", conn, if_exists="append", index=False)
 
         load_sql_file(conn, VIEWS_SQL)
 

@@ -15,10 +15,14 @@ cleans it, loads it into SQLite, and exports a merged CSV for Excel/Jamovi.
 Output files
 - data/raw/wage_raw.csv
 - data/raw/cpi_raw.csv
+- data/raw/wage_yoy_raw.csv
+- data/raw/cpi_yoy_raw.csv
 - iceland_wage_cpi.sqlite
 - data/processed/wage_clean.csv
 - data/processed/cpi_clean.csv
+- data/processed/wage_cpi_annual_change.csv
 - data/processed/wage_cpi_merged_from_sql.csv
+- data/processed/wage_cpi_annual_change_from_sql.csv
 
 Notes
 - If Excel has the merged CSV open, the export step will fail. Close the file and re-run.

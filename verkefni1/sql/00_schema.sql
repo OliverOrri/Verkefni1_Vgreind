@@ -28,3 +28,10 @@ CREATE TABLE cpi_clean (
   month TEXT NOT NULL PRIMARY KEY, -- "YYYY-MM"
   cpi   REAL NOT NULL
 );
+
+DROP TABLE IF EXISTS wage_cpi_annual_change_clean;
+CREATE TABLE wage_cpi_annual_change_clean (
+  month            TEXT NOT NULL PRIMARY KEY, -- "YYYY-MM"
+  wage_annual_pct  REAL NOT NULL,
+  cpi_annual_pct   REAL NOT NULL
+);
